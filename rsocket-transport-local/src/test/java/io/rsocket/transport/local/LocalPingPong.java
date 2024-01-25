@@ -43,7 +43,7 @@ public final class LocalPingPong {
 
     Recorder recorder = pingClient.startTracker(Duration.ofSeconds(1));
 
-    int count = 1_000_000_000;
+    int count = 2;
 
     pingClient
         .requestResponsePingPong(count, recorder)

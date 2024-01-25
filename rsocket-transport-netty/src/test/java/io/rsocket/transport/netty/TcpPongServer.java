@@ -38,7 +38,7 @@ public final class TcpPongServer {
     }
     server
         .payloadDecoder(PayloadDecoder.ZERO_COPY)
-        .bind(TcpServerTransport.create("localhost", port))
+        .bind(TcpServerTransport.create("localhost", port)).log()
         .block()
         .onClose()
         .block();

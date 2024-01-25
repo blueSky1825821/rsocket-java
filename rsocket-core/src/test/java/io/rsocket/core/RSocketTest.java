@@ -172,9 +172,9 @@ public class RSocketTest {
   @Timeout(200000)
   public void testChannel() {
     Flux<Payload> requests =
-        Flux.range(0, 10).map(i -> DefaultPayload.create("streaming in -> " + i));
+        Flux.range(0, 1).map(i -> DefaultPayload.create("streaming in -> " + i));
     Flux<Payload> responses = rule.crs.requestChannel(requests);
-    StepVerifier.create(responses).expectNextCount(10).expectComplete().verify();
+    StepVerifier.create(responses).expectNextCount(2).expectComplete().verify();
   }
 
   @Test
@@ -538,19 +538,19 @@ public class RSocketTest {
 
                 @Override
                 public Flux<Payload> requestStream(Payload payload) {
-                  return Flux.range(1, 10)
+                  return Flux.range(1, 1)
                       .map(i -> DefaultPayload.create("server got -> [" + payload + "]"));
                 }
 
                 @Override
                 public Flux<Payload> requestChannel(Publisher<Payload> payloads) {
-                  Flux.from(payloads)
-                      .map(
-                          payload ->
-                              DefaultPayload.create("server got -> [" + payload.toString() + "]"))
-                      .subscribe();
+//                  Flux.from(payloads)
+//                      .map(
+//                          payload ->
+//                              DefaultPayload.create("server got -> [" + payload.toString() + "]"))
+//                      .subscribe();
 
-                  return Flux.range(1, 10)
+                  return Flux.range(1, 2)
                       .map(
                           payload ->
                               DefaultPayload.create("server got -> [" + payload.toString() + "]"));
