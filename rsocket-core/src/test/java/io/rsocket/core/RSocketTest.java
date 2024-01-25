@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReference;
 import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -54,6 +55,11 @@ public class RSocketTest {
   @BeforeEach
   public void setup() {
     rule.init();
+  }
+
+  @AfterEach
+  public void tearDownAndCheckOnLeaks() {
+    rule.alloc().assertHasNoLeaks();
   }
 
   @Test
@@ -509,6 +515,8 @@ public class RSocketTest {
     private RSocket requestAcceptor;
 
     private LeaksTrackingByteBufAllocator allocator;
+    protected Sinks.Empty<Void> thisClosedSink;
+    protected Sinks.Empty<Void> otherClosedSink;
 
     public LeaksTrackingByteBufAllocator alloc() {
       return allocator;
@@ -518,6 +526,9 @@ public class RSocketTest {
       allocator = LeaksTrackingByteBufAllocator.instrument(ByteBufAllocator.DEFAULT);
       serverProcessor = Sinks.many().multicast().directBestEffort();
       clientProcessor = Sinks.many().multicast().directBestEffort();
+
+      this.thisClosedSink = Sinks.empty();
+      this.otherClosedSink = Sinks.empty();
 
       LocalDuplexConnection serverConnection =
           new LocalDuplexConnection("server", allocator, clientProcessor, serverProcessor);
@@ -566,7 +577,8 @@ public class RSocketTest {
               0,
               FRAME_LENGTH_MASK,
               Integer.MAX_VALUE,
-              __ -> null);
+              __ -> null,
+              otherClosedSink);
 
       crs =
           new RSocketRequester(
@@ -580,7 +592,9 @@ public class RSocketTest {
               0,
               null,
               __ -> null,
-              null);
+              null,
+              thisClosedSink,
+              otherClosedSink.asMono().and(thisClosedSink.asMono()));
     }
 
     public void setRequestAcceptor(RSocket requestAcceptor) {

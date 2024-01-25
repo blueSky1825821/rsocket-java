@@ -25,6 +25,7 @@ import io.rsocket.internal.BaseDuplexConnection;
 import java.net.SocketAddress;
 import java.util.Objects;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.netty.Connection;
 
 /**
@@ -35,7 +36,7 @@ import reactor.netty.Connection;
  * stitched back on for frames received.
  */
 public final class WebsocketDuplexConnection extends BaseDuplexConnection {
-
+  private final String side;
   private final Connection connection;
 
   /**
@@ -44,17 +45,24 @@ public final class WebsocketDuplexConnection extends BaseDuplexConnection {
    * @param connection the {@link Connection} to for managing the server
    */
   public WebsocketDuplexConnection(Connection connection) {
+    this("unknown", connection);
+  }
+
+  /**
+   * Creates a new instance
+   *
+   * @param connection the {@link Connection} to for managing the server
+   */
+  public WebsocketDuplexConnection(String side, Connection connection) {
     this.connection = Objects.requireNonNull(connection, "connection must not be null");
+    this.side = side;
 
     connection
-        .channel()
-        .closeFuture()
-        .addListener(
-            future -> {
-              if (!isDisposed()) dispose();
-            });
-
-    connection.outbound().sendObject(sender.map(BinaryWebSocketFrame::new)).then().subscribe();
+        .outbound()
+        .sendObject(sender.map(BinaryWebSocketFrame::new))
+        .then()
+        .doFinally(__ -> connection.dispose())
+        .subscribe();
   }
 
   @Override
@@ -73,6 +81,11 @@ public final class WebsocketDuplexConnection extends BaseDuplexConnection {
   }
 
   @Override
+  public Mono<Void> onClose() {
+    return Mono.whenDelayError(super.onClose(), connection.onTerminate());
+  }
+
+  @Override
   public Flux<ByteBuf> receive() {
     return connection.inbound().receive();
   }
@@ -80,20 +93,17 @@ public final class WebsocketDuplexConnection extends BaseDuplexConnection {
   @Override
   public void sendErrorAndClose(RSocketErrorException e) {
     final ByteBuf errorFrame = ErrorFrameCodec.encode(alloc(), 0, e);
-    connection
-        .outbound()
-        .sendObject(new BinaryWebSocketFrame(errorFrame))
-        .then()
-        .subscribe(
-            null,
-            t -> onClose.tryEmitError(t),
-            () -> {
-              final Throwable cause = e.getCause();
-              if (cause == null) {
-                onClose.tryEmitEmpty();
-              } else {
-                onClose.tryEmitError(cause);
-              }
-            });
+    sender.tryEmitFinal(errorFrame);
+  }
+
+  @Override
+  public String toString() {
+    return "WebsocketDuplexConnection{"
+        + "side='"
+        + side
+        + '\''
+        + ", connection="
+        + connection
+        + '}';
   }
 }

@@ -58,10 +58,12 @@ public class SetupRejectionTest {
     ByteBuf sentFrame = transport.awaitSent();
     assertThat(FrameHeaderCodec.frameType(sentFrame)).isEqualTo(FrameType.ERROR);
     RuntimeException error = Exceptions.from(0, sentFrame);
+    sentFrame.release();
     assertThat(errorMsg).isEqualTo(error.getMessage());
     assertThat(error).isInstanceOf(RejectedSetupException.class);
     RSocket acceptorSender = acceptor.senderRSocket().block();
     assertThat(acceptorSender.isDisposed()).isTrue();
+    transport.allocator.assertHasNoLeaks();
   }
 
   @Test
@@ -69,6 +71,8 @@ public class SetupRejectionTest {
     LeaksTrackingByteBufAllocator allocator =
         LeaksTrackingByteBufAllocator.instrument(ByteBufAllocator.DEFAULT);
     TestDuplexConnection conn = new TestDuplexConnection(allocator);
+    Sinks.Empty<Void> onThisSideClosedSink = Sinks.empty();
+
     RSocketRequester rSocket =
         new RSocketRequester(
             conn,
@@ -81,7 +85,9 @@ public class SetupRejectionTest {
             0,
             null,
             __ -> null,
-            null);
+            null,
+            onThisSideClosedSink,
+            onThisSideClosedSink.asMono());
 
     String errorMsg = "error";
 
@@ -100,6 +106,7 @@ public class SetupRejectionTest {
         .verify(Duration.ofSeconds(5));
 
     assertThat(rSocket.isDisposed()).isTrue();
+    allocator.assertHasNoLeaks();
   }
 
   @Test
@@ -107,6 +114,7 @@ public class SetupRejectionTest {
     LeaksTrackingByteBufAllocator allocator =
         LeaksTrackingByteBufAllocator.instrument(ByteBufAllocator.DEFAULT);
     TestDuplexConnection conn = new TestDuplexConnection(allocator);
+    Sinks.Empty<Void> onThisSideClosedSink = Sinks.empty();
     RSocketRequester rSocket =
         new RSocketRequester(
             conn,
@@ -119,7 +127,9 @@ public class SetupRejectionTest {
             0,
             null,
             __ -> null,
-            null);
+            null,
+            onThisSideClosedSink,
+            onThisSideClosedSink.asMono());
 
     conn.addToReceivedBuffer(
         ErrorFrameCodec.encode(ByteBufAllocator.DEFAULT, 0, new RejectedSetupException("error")));
@@ -131,6 +141,7 @@ public class SetupRejectionTest {
         .expectErrorMatches(
             err -> err instanceof RejectedSetupException && "error".equals(err.getMessage()))
         .verify(Duration.ofSeconds(5));
+    allocator.assertHasNoLeaks();
   }
 
   private static class RejectingAcceptor implements SocketAcceptor {

@@ -64,6 +64,7 @@ import java.util.Collection;
 import java.util.function.BiFunction;
 import java.util.stream.Stream;
 import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -91,6 +92,8 @@ class RSocketLeaseTest {
 
   private Sinks.Many<Lease> leaseSender = Sinks.many().multicast().onBackpressureBuffer();
   private RequesterLeaseTracker requesterLeaseTracker;
+  protected Sinks.Empty<Void> thisClosedSink;
+  protected Sinks.Empty<Void> otherClosedSink;
 
   @BeforeEach
   void setUp() {
@@ -100,6 +103,8 @@ class RSocketLeaseTest {
     connection = new TestDuplexConnection(byteBufAllocator);
     requesterLeaseTracker = new RequesterLeaseTracker(TAG, 0);
     responderLeaseTracker = new ResponderLeaseTracker(TAG, connection, () -> leaseSender.asFlux());
+    this.thisClosedSink = Sinks.empty();
+    this.otherClosedSink = Sinks.empty();
 
     ClientServerInputMultiplexer multiplexer =
         new ClientServerInputMultiplexer(connection, new InitializingInterceptorRegistry(), true);
@@ -115,7 +120,9 @@ class RSocketLeaseTest {
             0,
             null,
             __ -> null,
-            requesterLeaseTracker);
+            requesterLeaseTracker,
+            thisClosedSink,
+            otherClosedSink.asMono().and(thisClosedSink.asMono()));
 
     mockRSocketHandler = mock(RSocket.class);
     when(mockRSocketHandler.metadataPush(any()))
@@ -182,7 +189,13 @@ class RSocketLeaseTest {
             0,
             FRAME_LENGTH_MASK,
             Integer.MAX_VALUE,
-            __ -> null);
+            __ -> null,
+            otherClosedSink);
+  }
+
+  @AfterEach
+  void tearDownAndCheckForLeaks() {
+    byteBufAllocator.assertHasNoLeaks();
   }
 
   @Test
@@ -210,18 +223,26 @@ class RSocketLeaseTest {
     Assertions.assertThat(FrameHeaderCodec.frameType(error)).isEqualTo(ERROR);
     Assertions.assertThat(Exceptions.from(0, error).getMessage())
         .isEqualTo("lease is not supported");
+    error.release();
+    connection.dispose();
+    transport.alloc().assertHasNoLeaks();
   }
 
   @Test
   public void clientRSocketFactorySetsLeaseFlag() {
     TestClientTransport clientTransport = new TestClientTransport();
-    RSocketConnector.create().lease().connect(clientTransport).block();
-
-    Collection<ByteBuf> sent = clientTransport.testConnection().getSent();
-    Assertions.assertThat(sent).hasSize(1);
-    ByteBuf setup = sent.iterator().next();
-    Assertions.assertThat(FrameHeaderCodec.frameType(setup)).isEqualTo(SETUP);
-    Assertions.assertThat(SetupFrameCodec.honorLease(setup)).isTrue();
+    try {
+      RSocketConnector.create().lease().connect(clientTransport).block();
+      Collection<ByteBuf> sent = clientTransport.testConnection().getSent();
+      Assertions.assertThat(sent).hasSize(1);
+      ByteBuf setup = sent.iterator().next();
+      Assertions.assertThat(FrameHeaderCodec.frameType(setup)).isEqualTo(SETUP);
+      Assertions.assertThat(SetupFrameCodec.honorLease(setup)).isTrue();
+      setup.release();
+    } finally {
+      clientTransport.testConnection().dispose();
+      clientTransport.alloc().assertHasNoLeaks();
+    }
   }
 
   @ParameterizedTest
@@ -375,10 +396,16 @@ class RSocketLeaseTest {
 
   @Test
   void requesterAvailabilityRespectsTransport() {
-    requesterLeaseTracker.handleLeaseFrame(leaseFrame(5_000, 1, Unpooled.EMPTY_BUFFER));
-    double unavailable = 0.0;
-    connection.setAvailability(unavailable);
-    Assertions.assertThat(rSocketRequester.availability()).isCloseTo(unavailable, offset(1e-2));
+    ByteBuf frame = leaseFrame(5_000, 1, Unpooled.EMPTY_BUFFER);
+    try {
+
+      requesterLeaseTracker.handleLeaseFrame(frame);
+      double unavailable = 0.0;
+      connection.setAvailability(unavailable);
+      Assertions.assertThat(rSocketRequester.availability()).isCloseTo(unavailable, offset(1e-2));
+    } finally {
+      frame.release();
+    }
   }
 
   @ParameterizedTest
@@ -630,10 +657,14 @@ class RSocketLeaseTest {
             .findFirst()
             .orElseThrow(() -> new IllegalStateException("Lease frame not sent"));
 
-    Assertions.assertThat(LeaseFrameCodec.ttl(leaseFrame)).isEqualTo(ttl);
-    Assertions.assertThat(LeaseFrameCodec.numRequests(leaseFrame)).isEqualTo(numberOfRequests);
-    Assertions.assertThat(LeaseFrameCodec.metadata(leaseFrame).toString(utf8))
-        .isEqualTo(metadataContent);
+    try {
+      Assertions.assertThat(LeaseFrameCodec.ttl(leaseFrame)).isEqualTo(ttl);
+      Assertions.assertThat(LeaseFrameCodec.numRequests(leaseFrame)).isEqualTo(numberOfRequests);
+      Assertions.assertThat(LeaseFrameCodec.metadata(leaseFrame).toString(utf8))
+          .isEqualTo(metadataContent);
+    } finally {
+      leaseFrame.release();
+    }
   }
 
   //  @Test

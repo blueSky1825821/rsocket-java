@@ -113,6 +113,7 @@ public class RSocketResponderTest {
   public void tearDown() {
     Hooks.resetOnErrorDropped();
     Hooks.resetOnNextDropped();
+    rule.assertHasNoLeaks();
   }
 
   @Test
@@ -146,9 +147,7 @@ public class RSocketResponderTest {
         });
     rule.sendRequest(streamId, FrameType.REQUEST_RESPONSE);
     testPublisher.complete();
-    assertThat(frameType(rule.connection.awaitFrame()))
-        .describedAs("Unexpected frame sent.")
-        .isIn(FrameType.COMPLETE, FrameType.NEXT_COMPLETE);
+    FrameAssert.assertThat(rule.connection.awaitFrame()).typeOf(FrameType.COMPLETE).hasNoLeaks();
     testPublisher.assertWasNotCancelled();
   }
 
@@ -158,9 +157,10 @@ public class RSocketResponderTest {
     final int streamId = 4;
     rule.prefetch = 1;
     rule.sendRequest(streamId, FrameType.REQUEST_STREAM);
-    assertThat(frameType(rule.connection.awaitFrame()))
-        .describedAs("Unexpected frame sent.")
-        .isEqualTo(FrameType.ERROR);
+    FrameAssert.assertThat(rule.connection.awaitFrame())
+        .typeOf(FrameType.ERROR)
+        .hasData("Request-Stream not implemented.")
+        .hasNoLeaks();
   }
 
   @Test
@@ -1184,6 +1184,7 @@ public class RSocketResponderTest {
     private RSocket acceptingSocket;
     private volatile int prefetch;
     private RequestInterceptor requestInterceptor;
+    protected Sinks.Empty<Void> onCloseSink;
 
     @Override
     protected void doInit() {
@@ -1220,6 +1221,7 @@ public class RSocketResponderTest {
 
     @Override
     protected RSocketResponder newRSocket() {
+      onCloseSink = Sinks.empty();
       return new RSocketResponder(
           connection,
           acceptingSocket,
@@ -1228,7 +1230,8 @@ public class RSocketResponderTest {
           0,
           maxFrameLength,
           maxInboundPayloadSize,
-          __ -> requestInterceptor);
+          __ -> requestInterceptor,
+          onCloseSink);
     }
 
     private void sendRequest(int streamId, FrameType frameType) {

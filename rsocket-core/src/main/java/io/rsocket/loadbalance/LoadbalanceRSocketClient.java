@@ -27,8 +27,8 @@ import reactor.core.publisher.Mono;
 import reactor.util.annotation.Nullable;
 
 /**
- * An implementation of {@link RSocketClient backed by a pool of {@code RSocket} instances and using a {@link
- * LoadbalanceStrategy} to select the {@code RSocket} to use for a given request.
+ * An implementation of {@link RSocketClient} backed by a pool of {@code RSocket} instances and
+ * using a {@link LoadbalanceStrategy} to select the {@code RSocket} to use for a given request.
  *
  * @since 1.1
  */
@@ -38,6 +38,16 @@ public class LoadbalanceRSocketClient implements RSocketClient {
 
   private LoadbalanceRSocketClient(RSocketPool rSocketPool) {
     this.rSocketPool = rSocketPool;
+  }
+
+  @Override
+  public Mono<Void> onClose() {
+    return rSocketPool.onClose();
+  }
+
+  @Override
+  public boolean connect() {
+    return rSocketPool.connect();
   }
 
   /** Return {@code Mono} that selects an RSocket from the underlying pool. */
@@ -63,7 +73,7 @@ public class LoadbalanceRSocketClient implements RSocketClient {
 
   @Override
   public Flux<Payload> requestChannel(Publisher<Payload> payloads) {
-    return rSocketPool.select().requestChannel(payloads);
+    return source().flatMapMany(rSocket -> rSocket.requestChannel(payloads));
   }
 
   @Override

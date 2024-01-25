@@ -21,6 +21,7 @@ import static io.rsocket.frame.FrameLengthCodec.FRAME_LENGTH_MASK;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.util.CharsetUtil;
+import io.rsocket.FrameAssert;
 import io.rsocket.RSocket;
 import io.rsocket.buffer.LeaksTrackingByteBufAllocator;
 import io.rsocket.frame.FrameHeaderCodec;
@@ -37,6 +38,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -44,6 +46,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.util.RaceTestUtils;
 
 class RSocketRequesterSubscribersTest {
@@ -60,11 +63,20 @@ class RSocketRequesterSubscribersTest {
   private LeaksTrackingByteBufAllocator allocator;
   private RSocket rSocketRequester;
   private TestDuplexConnection connection;
+  protected Sinks.Empty<Void> thisClosedSink;
+  protected Sinks.Empty<Void> otherClosedSink;
+
+  @AfterEach
+  void tearDownAndCheckNoLeaks() {
+    allocator.assertHasNoLeaks();
+  }
 
   @BeforeEach
   void setUp() {
     allocator = LeaksTrackingByteBufAllocator.instrument(ByteBufAllocator.DEFAULT);
     connection = new TestDuplexConnection(allocator);
+    this.thisClosedSink = Sinks.empty();
+    this.otherClosedSink = Sinks.empty();
     rSocketRequester =
         new RSocketRequester(
             connection,
@@ -77,11 +89,14 @@ class RSocketRequesterSubscribersTest {
             0,
             null,
             __ -> null,
-            null);
+            null,
+            thisClosedSink,
+            otherClosedSink.asMono().and(thisClosedSink.asMono()));
   }
 
   @ParameterizedTest
   @MethodSource("allInteractions")
+  @SuppressWarnings({"rawtypes", "unchecked"})
   void singleSubscriber(Function<RSocket, Publisher<?>> interaction, FrameType requestType) {
     Flux<?> response = Flux.from(interaction.apply(rSocketRequester));
 
@@ -98,7 +113,11 @@ class RSocketRequesterSubscribersTest {
     assertSubscriberA.assertTerminated();
     assertSubscriberB.assertTerminated();
 
-    Assertions.assertThat(requestFramesCount(connection.getSent())).isEqualTo(1);
+    FrameAssert.assertThat(connection.pollFrame()).typeOf(requestType).hasNoLeaks();
+
+    if (requestType == FrameType.REQUEST_CHANNEL) {
+      FrameAssert.assertThat(connection.pollFrame()).typeOf(FrameType.COMPLETE).hasNoLeaks();
+    }
   }
 
   @ParameterizedTest

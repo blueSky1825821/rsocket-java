@@ -35,6 +35,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoOperator;
 import reactor.core.publisher.Operators;
+import reactor.core.publisher.Sinks;
 import reactor.util.annotation.Nullable;
 import reactor.util.context.Context;
 
@@ -45,13 +46,16 @@ import reactor.util.context.Context;
  */
 class DefaultRSocketClient extends ResolvingOperator<RSocket>
     implements CoreSubscriber<RSocket>, CorePublisher<RSocket>, RSocketClient {
-  static final Consumer<ReferenceCounted> DISCARD_ELEMENTS_CONSUMER =
-      referenceCounted -> {
-        if (referenceCounted.refCnt() > 0) {
-          try {
-            referenceCounted.release();
-          } catch (IllegalReferenceCountException e) {
-            // ignored
+  static final Consumer<?> DISCARD_ELEMENTS_CONSUMER =
+      data -> {
+        if (data instanceof ReferenceCounted) {
+          ReferenceCounted referenceCounted = ((ReferenceCounted) data);
+          if (referenceCounted.refCnt() > 0) {
+            try {
+              referenceCounted.release();
+            } catch (IllegalReferenceCountException e) {
+              // ignored
+            }
           }
         }
       };
@@ -65,6 +69,8 @@ class DefaultRSocketClient extends ResolvingOperator<RSocket>
 
   final Mono<RSocket> source;
 
+  final Sinks.Empty<Void> onDisposeSink;
+
   volatile Subscription s;
 
   static final AtomicReferenceFieldUpdater<DefaultRSocketClient, Subscription> S =
@@ -72,10 +78,16 @@ class DefaultRSocketClient extends ResolvingOperator<RSocket>
 
   DefaultRSocketClient(Mono<RSocket> source) {
     this.source = unwrapReconnectMono(source);
+    this.onDisposeSink = Sinks.empty();
   }
 
   private Mono<RSocket> unwrapReconnectMono(Mono<RSocket> source) {
     return source instanceof ReconnectMono ? ((ReconnectMono<RSocket>) source).getSource() : source;
+  }
+
+  @Override
+  public Mono<Void> onClose() {
+    return this.onDisposeSink.asMono();
   }
 
   @Override
@@ -194,6 +206,12 @@ class DefaultRSocketClient extends ResolvingOperator<RSocket>
   @Override
   protected void doOnDispose() {
     Operators.terminate(S, this);
+    final RSocket value = this.value;
+    if (value != null) {
+      value.onClose().subscribe(null, onDisposeSink::tryEmitError, onDisposeSink::tryEmitEmpty);
+    } else {
+      onDisposeSink.tryEmitEmpty();
+    }
   }
 
   static final class FlatMapMain<R> implements CoreSubscriber<Payload>, Context, Scannable {
@@ -435,8 +453,8 @@ class DefaultRSocketClient extends ResolvingOperator<RSocket>
 
     @Override
     public void request(long n) {
-      this.main.request(n);
       super.request(n);
+      this.main.request(n);
     }
 
     public void cancel() {
